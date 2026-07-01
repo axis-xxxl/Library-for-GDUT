@@ -248,6 +248,41 @@
             font-weight: 600;
             color: #0f3b1e;
         }
+        .wrong-mode-banner {
+            background: #fef3c7;
+            border: 2px solid #f59e0b;
+            border-radius: 12px;
+            padding: 10px 20px;
+            margin-bottom: 16px;
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            font-weight: 500;
+            color: #92400e;
+        }
+        .wrong-mode-banner.show {
+            display: flex;
+        }
+        .btn-exit-mode {
+            border: none;
+            background: #f59e0b;
+            color: white;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .btn-exit-mode:hover {
+            background: #d97706;
+        }
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 12px;
+            border-radius: 20px;
+        }
         @media (max-width: 600px) {
             .container { padding: 18px; }
             .question-text { font-size: 17px; }
@@ -265,6 +300,11 @@
     </h1>
     <div class="progress-bar">
         <div class="progress-fill" id="progressFill" style="width: 0%;"></div>
+    </div>
+
+    <div class="wrong-mode-banner" id="wrongModeBanner">
+        <span id="wrongModeText">📕 错题模式</span>
+        <button class="btn-exit-mode" id="exitWrongModeBtn">✕ 退出错题模式</button>
     </div>
 
     <div class="question-header">
@@ -288,10 +328,14 @@
         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
             <button class="btn btn-outline" id="prevBtn" disabled>◀ 上一题</button>
             <button class="btn btn-primary" id="nextBtn">下一题 ▶</button>
-            <button class="btn btn-outline" id="resetBtn" style="background:#fee2e2; border-color:#fca5a5;">↺ 重置</button>
+            <button class="btn btn-outline" id="wrongBookBtn" style="background:#fef3c7; border-color:#f59e0b;">📖 错题本</button>
+            <button class="btn btn-outline" id="resetCurrentBtn" style="background:#e0f2fe; border-color:#7dd3fc;">↺ 重做本题</button>
         </div>
     </div>
-    <div class="footer-note">✔ 点击选项后自动显示正确答案 · 进度自动保存</div>
+    <div class="footer-note">
+        ✔ 点击选项后自动显示正确答案 · 进度自动保存
+        <button class="btn btn-outline btn-sm" id="resetAllBtn" style="background:#fee2e2; border-color:#fca5a5; margin-left: 16px; vertical-align: middle;">↺ 重置所有</button>
+    </div>
 </div>
 <script>
     (function() {
@@ -703,199 +747,280 @@
             });
         }
 
-        // ---------- 应用状态 ----------
-        let currentIndex = 0;
-        const total = RAW_QUESTIONS.length;
-        // 存储每道题的选中选项索引 (-1 表示未选)
-        let selected = new Array(total).fill(-1);
-        // 存储每道题是否已经显示过正确答案（用于标记样式）
-        let revealed = new Array(total).fill(false);
-        let wrongQuestions = new Set();
-        // DOM 引用
-        const qNumber = document.getElementById('qNumber');
-        const qType = document.getElementById('qType');
-        const questionText = document.getElementById('questionText');
-        const optionsContainer = document.getElementById('optionsContainer');
-        const feedback = document.getElementById('feedback');
-        const feedbackText = document.getElementById('feedbackText');
-        const prevBtn = document.getElementById('prevBtn');
-        const nextBtn = document.getElementById('nextBtn');
-        const resetBtn = document.getElementById('resetBtn');
-        const progressFill = document.getElementById('progressFill');
-        const answeredCount = document.getElementById('answeredCount');
-        const correctCount = document.getElementById('correctCount');
+// ---------- 应用状态 ----------
+let currentIndex = 0;
+const total = RAW_QUESTIONS.length;
+// 存储每道题的选中选项索引 (-1 表示未选)
+let selected = new Array(total).fill(-1);
+// 存储每道题是否已经显示过正确答案（用于标记样式）
+let revealed = new Array(total).fill(false);
+// 存储错题索引
+let wrongQuestions = new Set();
+// 错题模式状态
+let isWrongMode = false;
+let wrongList = [];
 
-        // ---------- 渲染当前题目 ----------
-        function renderQuestion() {
-            const q = RAW_QUESTIONS[currentIndex];
-            const idx = currentIndex;
-            const sel = selected[idx];
-            const isRevealed = revealed[idx];
+// DOM 引用
+const qNumber = document.getElementById('qNumber');
+const qType = document.getElementById('qType');
+const questionTextEl = document.getElementById('questionText');
+const optionsContainer = document.getElementById('optionsContainer');
+const feedback = document.getElementById('feedback');
+const feedbackText = document.getElementById('feedbackText');
+const prevBtn = document.getElementById('prevBtn');
+const nextBtn = document.getElementById('nextBtn');
+const resetAllBtn = document.getElementById('resetAllBtn');
+const wrongBookBtn = document.getElementById('wrongBookBtn');
+const resetCurrentBtn = document.getElementById('resetCurrentBtn');
+const progressFill = document.getElementById('progressFill');
+const answeredCount = document.getElementById('answeredCount');
+const correctCount = document.getElementById('correctCount');
+const wrongModeBanner = document.getElementById('wrongModeBanner');
+const wrongModeText = document.getElementById('wrongModeText');
+const exitWrongModeBtn = document.getElementById('exitWrongModeBtn');
 
-            // 题号
-            qNumber.textContent = `第 ${idx+1} / ${total} 题`;
-            qType.textContent = '单选题';
+// ---------- 刷新错题列表 ----------
+function refreshWrongList() {
+    wrongQuestions.clear();
+    for (let i = 0; i < total; i++) {
+        if (selected[i] !== -1 && selected[i] !== RAW_QUESTIONS[i].answer) {
+            wrongQuestions.add(i);
+        }
+    }
+    wrongList = Array.from(wrongQuestions).sort((a, b) => a - b);
+}
 
-            // 题目文本
-            questionText.textContent = q.q;
+// ---------- 渲染当前题目 ----------
+function renderQuestion() {
+    const q = RAW_QUESTIONS[currentIndex];
+    const idx = currentIndex;
+    const sel = selected[idx];
+    const isRevealed = revealed[idx];
 
-            // 构建选项
-            let html = '';
-            const labels = ['A', 'B', 'C', 'D'];
-            q.options.forEach((opt, i) => {
-                let classes = 'option';
-                if (isRevealed) {
-                    classes += ' disabled-opt';
-                    if (i === q.answer) {
-                        classes += ' correct-reveal';
-                    } else if (i === sel && sel !== q.answer) {
-                        classes += ' wrong-reveal';
-                    } else if (i === sel && sel === q.answer) {
-                        classes += ' correct-reveal';
-                    }
-                } else {
-                    if (i === sel) {
-                        classes += ' selected';
-                    }
-                }
-                // 标记字母
-                html += `<div class="${classes}" data-optindex="${i}">
-                    <span class="marker">${labels[i]}</span>
-                    <span>${opt}</span>
-                </div>`;
+    // 题号：错题模式显示错题序号
+    if (isWrongMode && wrongList.length > 0) {
+        const wrongPos = wrongList.indexOf(idx);
+        qNumber.textContent = `📕 错题 ${wrongPos + 1} / ${wrongList.length}（总第 ${idx + 1} 题）`;
+    } else {
+        qNumber.textContent = `第 ${idx + 1} / ${total} 题`;
+    }
+    qType.textContent = '单选题';
+
+    // 题目文本
+    questionTextEl.textContent = q.q;
+
+    // 构建选项
+    let html = '';
+    const labels = ['A', 'B', 'C', 'D'];
+    q.options.forEach((opt, i) => {
+        let classes = 'option';
+        if (isRevealed) {
+            classes += ' disabled-opt';
+            if (i === q.answer) {
+                classes += ' correct-reveal';
+            } else if (i === sel && sel !== q.answer) {
+                classes += ' wrong-reveal';
+            } else if (i === sel && sel === q.answer) {
+                classes += ' correct-reveal';
+            }
+        } else {
+            if (i === sel) {
+                classes += ' selected';
+            }
+        }
+        html += `<div class="${classes}" data-optindex="${i}">
+            <span class="marker">${labels[i]}</span>
+            <span>${opt}</span>
+        </div>`;
+    });
+    optionsContainer.innerHTML = html;
+
+    // 事件绑定 (只有未揭示时才可点击)
+    if (!isRevealed) {
+        document.querySelectorAll('.option:not(.disabled-opt)').forEach(el => {
+            el.addEventListener('click', (e) => {
+                const optIdx = parseInt(el.dataset.optindex, 10);
+                handleOptionClick(optIdx);
             });
-            optionsContainer.innerHTML = html;
+        });
+    }
 
-            // 事件绑定 (只有未揭示时才可点击)
-            if (!isRevealed) {
-                document.querySelectorAll('.option:not(.disabled-opt)').forEach(el => {
-                    el.addEventListener('click', (e) => {
-                        const optIdx = parseInt(el.dataset.optindex, 10);
-                        handleOptionClick(optIdx);
-                    });
-                });
-            }
+    // 反馈区域
+    if (isRevealed) {
+        const correctLabel = labels[q.answer];
+        const correctText = q.options[q.answer];
+        feedbackText.innerHTML = `✅ 正确答案：<span class="correct-answer">${correctLabel}. ${correctText}</span>`;
+        feedback.classList.add('show');
+    } else {
+        feedback.classList.remove('show');
+    }
 
-            // 反馈区域
-            if (isRevealed) {
-                const correctLabel = labels[q.answer];
-                const correctText = q.options[q.answer];
-                feedbackText.innerHTML = `✅ 正确答案：<span class="correct-answer">${correctLabel}. ${correctText}</span>`;
-                feedback.classList.add('show');
-            } else {
-                feedback.classList.remove('show');
-            }
+    // 按钮状态（错题模式下的上/下题按钮依然可用）
+    if (isWrongMode && wrongList.length > 0) {
+        const wrongPos = wrongList.indexOf(currentIndex);
+        prevBtn.disabled = (wrongPos <= 0);
+        // 如果是最后一题错题，下一题按钮禁用；否则可用
+        nextBtn.disabled = (wrongPos >= wrongList.length - 1);
+    } else {
+        prevBtn.disabled = (currentIndex === 0);
+        nextBtn.disabled = false;
+    }
 
-            // 按钮状态
-            prevBtn.disabled = (idx === 0);
-            // 更新进度
-            const answered = selected.filter(v => v !== -1).length;
-            progressFill.style.width = `${(answered / total) * 100}%`;
+    // 更新进度
+    const answered = selected.filter(v => v !== -1).length;
+    progressFill.style.width = `${(answered / total) * 100}%`;
 
-            // 统计
-            const totalCorrect = selected.reduce((acc, val, i) => {
-                if (val === -1) return acc;
-                return acc + (val === RAW_QUESTIONS[i].answer ? 1 : 0);
-            }, 0);
-            answeredCount.textContent = `✅ ${answered}`;
-            correctCount.textContent = `🎯 ${totalCorrect}`;
-            if (selected[currentIndex] !== -1) {
-            if (selected[currentIndex] !== RAW_QUESTIONS[currentIndex].answer) {
-            wrongQuestions.add(currentIndex);
-            } else {
-            wrongQuestions.delete(currentIndex);
-         }}
-            // 如果当前题目已选但未揭示，且用户可能希望自动显示？ 但我们保留手动点击触发
-            // 但已选状态展示
-        }
+    // 统计
+    const totalCorrect = selected.reduce((acc, val, i) => {
+        if (val === -1) return acc;
+        return acc + (val === RAW_QUESTIONS[i].answer ? 1 : 0);
+    }, 0);
+    answeredCount.textContent = `✅ ${answered}`;
+    correctCount.textContent = `🎯 ${totalCorrect}`;
 
-        // ---------- 处理选项点击 ----------
-        function handleOptionClick(optIndex) {
-            const idx = currentIndex;
-            // 如果已揭示，不允许更改
-            if (revealed[idx]) return;
-            // 选中该选项
-            selected[idx] = optIndex;
-            // 自动揭示正确答案
-            revealed[idx] = true;
-            renderQuestion();
-        }
+    // 更新错题本按钮文字
+    refreshWrongList();
+    wrongBookBtn.textContent = `📖 错题本 (${wrongList.length})`;
 
-        // ---------- 切换题目 ----------
-        function goTo(index) {
-            if (index < 0 || index >= total) return;
-            currentIndex = index;
-            renderQuestion();
-        }
+    // 更新错题模式横幅
+    if (isWrongMode) {
+        wrongModeBanner.classList.add('show');
+        wrongModeText.textContent = `📕 错题模式 · 共 ${wrongList.length} 道错题`;
+    } else {
+        wrongModeBanner.classList.remove('show');
+    }
+}
 
-        // ---------- 重置所有 ----------
-        function resetAll() {
-            selected.fill(-1);
-            revealed.fill(false);
-            wrongQuestions.clear();
-            currentIndex = 0;
-            renderQuestion();
-        }
+// ---------- 处理选项点击 ----------
+function handleOptionClick(optIndex) {
+    const idx = currentIndex;
+    if (revealed[idx]) return;
+    selected[idx] = optIndex;
+    revealed[idx] = true;
+    refreshWrongList();
+    renderQuestion();
+}
 
-        // ---------- 事件绑定 ----------
-        prevBtn.addEventListener('click', () => goTo(currentIndex - 1));
-        nextBtn.addEventListener('click', () => goTo(currentIndex + 1));
-        resetBtn.addEventListener('click', resetAll);
-        // ---------- 添加错题本按钮（在 resetBtn 后面） ----------
-// 在 DOM 构建部分或事件绑定区域添加
-const actionBar = document.querySelector('.action-bar');
-const btnGroup = document.createElement('div');
-btnGroup.style.display = 'flex';
-btnGroup.style.gap = '10px';
-btnGroup.style.flexWrap = 'wrap';
+// ---------- 切换题目 ----------
+function goTo(index) {
+    if (index < 0 || index >= total) return;
+    currentIndex = index;
+    renderQuestion();
+}
 
-// 将原有按钮移动到 btnGroup 中
-const prevBtnClone = prevBtn.parentNode.removeChild(prevBtn);
-const nextBtnClone = nextBtn.parentNode.removeChild(nextBtn);
-const resetBtnClone = resetBtn.parentNode.removeChild(resetBtn);
-btnGroup.appendChild(prevBtnClone);
-btnGroup.appendChild(nextBtnClone);
-btnGroup.appendChild(resetBtnClone);
+// ---------- 错题模式下切换 ----------
+function goWrongPrev() {
+    if (!isWrongMode || wrongList.length === 0) return;
+    const wrongPos = wrongList.indexOf(currentIndex);
+    if (wrongPos > 0) {
+        goTo(wrongList[wrongPos - 1]);
+    }
+}
 
-// 新增错题本按钮
-const wrongBookBtn = document.createElement('button');
-wrongBookBtn.className = 'btn btn-outline';
-wrongBookBtn.textContent = '📖 错题本';
-wrongBookBtn.style.background = '#fef3c7';
-wrongBookBtn.style.borderColor = '#f59e0b';
-wrongBookBtn.addEventListener('click', () => {
-    if (wrongQuestions.size === 0) {
+function goWrongNext() {
+    if (!isWrongMode || wrongList.length === 0) return;
+    const wrongPos = wrongList.indexOf(currentIndex);
+    if (wrongPos < wrongList.length - 1) {
+        goTo(wrongList[wrongPos + 1]);
+    }
+}
+
+function goNormalPrev() {
+    goTo(currentIndex - 1);
+}
+
+function goNormalNext() {
+    goTo(currentIndex + 1);
+}
+
+// ---------- 进入错题模式 ----------
+function enterWrongMode() {
+    refreshWrongList();
+    if (wrongList.length === 0) {
         alert('🎉 太棒了！暂无错题！');
         return;
     }
-    const wrongList = Array.from(wrongQuestions).sort((a, b) => a - b);
-    let msg = '📕 错题列表（共 ' + wrongList.length + ' 题）：\n\n';
-    wrongList.forEach(idx => {
-        msg += `第 ${idx+1} 题：${RAW_QUESTIONS[idx].q.substring(0, 35)}...\n`;
-    });
-    alert(msg);
-    if (wrongList.length > 0) {
-        goTo(wrongList[0]);
+    isWrongMode = true;
+    // 跳转到第一道错题
+    goTo(wrongList[0]);
+}
+
+// ---------- 退出错题模式 ----------
+function exitWrongMode() {
+    isWrongMode = false;
+    renderQuestion();
+}
+
+// ---------- 重置当前题目 ----------
+function resetCurrent() {
+    const idx = currentIndex;
+    selected[idx] = -1;
+    revealed[idx] = false;
+    refreshWrongList();
+    renderQuestion();
+}
+
+// ---------- 重置所有 ----------
+function resetAll() {
+    if (!confirm('确定要重置所有答题进度吗？此操作不可撤销！')) return;
+    selected.fill(-1);
+    revealed.fill(false);
+    wrongQuestions.clear();
+    wrongList = [];
+    isWrongMode = false;
+    currentIndex = 0;
+    renderQuestion();
+}
+
+// ---------- 事件绑定 ----------
+prevBtn.addEventListener('click', () => {
+    if (isWrongMode) {
+        goWrongPrev();
+    } else {
+        goNormalPrev();
     }
 });
-btnGroup.appendChild(wrongBookBtn);
+nextBtn.addEventListener('click', () => {
+    if (isWrongMode) {
+        goWrongNext();
+    } else {
+        goNormalNext();
+    }
+});
+resetAllBtn.addEventListener('click', resetAll);
+wrongBookBtn.addEventListener('click', () => {
+    if (isWrongMode) {
+        // 已经在错题模式，再点就退出
+        exitWrongMode();
+    } else {
+        enterWrongMode();
+    }
+});
+resetCurrentBtn.addEventListener('click', resetCurrent);
+exitWrongModeBtn.addEventListener('click', exitWrongMode);
 
-// 将 btnGroup 放回 actionBar（放在 stats 后面）
-document.querySelector('.stats').after(btnGroup);
-        // 键盘支持 (左右方向键)
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'ArrowLeft') {
-                e.preventDefault();
-                goTo(currentIndex - 1);
-            } else if (e.key === 'ArrowRight') {
-                e.preventDefault();
-                goTo(currentIndex + 1);
-            }
-        });
+// 键盘支持 (左右方向键)
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (isWrongMode) {
+            goWrongPrev();
+        } else {
+            goNormalPrev();
+        }
+    } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (isWrongMode) {
+            goWrongNext();
+        } else {
+            goNormalNext();
+        }
+    }
+});
 
-        // 初始渲染
-        renderQuestion();
-    })();
+// 初始渲染
+renderQuestion();
+})();
 </script>
 </body>
 </html>
